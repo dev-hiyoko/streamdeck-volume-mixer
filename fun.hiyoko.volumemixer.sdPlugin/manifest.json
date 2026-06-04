@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "SDKVersion": 2,
+  "Author": "HiyokoDev",
+  "Name": "Hiyoko Volume Mixer",
+  "Category": "Hiyoko Volume Mixer",
+  "CategoryIcon": "imgs/category-icon",
+  "Description": "アプリの音量・ミュートを自動検出して操作する音量ミキサーです。",
+  "Version": "0.2.0.0",
+  "UUID": "fun.hiyoko.volumemixer",
+  "Icon": "imgs/plugin-icon",
+  "DisableCaching": true,
+  "CodePath": "bin/plugin.js",
+  "Nodejs": {
+    "Version": "20"
+  },
+  "Profiles": [],
+  "Software": {
+    "MinimumVersion": "7.1"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Actions": [
+    {
+      "UUID": "fun.hiyoko.volumemixer.app-volume",
+      "Name": "アプリ音量ミキサー",
+      "Icon": "imgs/action-icon",
+      "Controllers": ["Keypad"],
+      "PropertyInspectorPath": "ui/action-settings.html",
+      "States": [
+        {
+          "Image": "imgs/action-icon",
+          "TitleAlignment": "middle"
+        }
+      ]
+    }
+  ]
+}

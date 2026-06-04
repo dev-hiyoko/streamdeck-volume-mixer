@@ -1,7 +1,7 @@
 node_modules/
 
 # Build outputs
-fun.hiyoko.audiomixer.sdPlugin/bin/
+fun.hiyoko.volumemixer.sdPlugin/bin/
 
 # Local logs and package-manager noise
 *.log
@@ -12,3 +12,4 @@ npm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+tmp/

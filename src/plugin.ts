@@ -1,12 +1,12 @@
 import streamDeck from "@elgato/streamdeck";
 
-import { JsonRpcCommandAction } from "./actions/json-rpc-command.js";
-import { MasterStatusAction } from "./actions/master-status.js";
+import { AppVolumeAction } from "./actions/app-volume.js";
 import { audioControlClient } from "./audio-control-client.js";
 
-streamDeck.actions.registerAction(new MasterStatusAction());
-streamDeck.actions.registerAction(new JsonRpcCommandAction());
+streamDeck.actions.registerAction(new AppVolumeAction());
 
-audioControlClient.connect();
+audioControlClient.connect().catch((error) => {
+  streamDeck.logger.warn(`Audio Control WebSocket is not ready yet: ${String(error)}`);
+});
 
 streamDeck.connect();

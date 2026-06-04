@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hiyoko Volume Mixer</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d0d0f;
+      --panel: #151517;
+      --panel-2: #1c1c1f;
+      --panel-3: #26262b;
+      --line: #2b2b30;
+      --line-strong: #3c3c42;
+      --text: #f4f4f5;
+      --muted: #9a9aa1;
+      --accent: #f4f4f5;
+      --radius: 10px;
+      accent-color: var(--text);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 13px/1.45 "Segoe UI", system-ui, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { padding: 14px; display: grid; gap: 14px; }
+    .section {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .section.global { border-color: var(--line-strong); background: #131314; }
+    .section h2 {
+      margin: 0 0 2px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--muted);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .tag {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
+      text-transform: none;
+      color: var(--muted);
+      border: 1px solid var(--line-strong);
+      border-radius: 999px; padding: 1px 8px;
+    }
+    .row { display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 10px; align-items: center; }
+    .row > label { color: var(--muted); font-size: 12px; }
+    input, select {
+      width: 100%; min-width: 0;
+      border: 1px solid var(--line-strong); border-radius: 8px;
+      background: var(--panel-2); color: var(--text);
+      padding: 8px 10px; font: inherit;
+      transition: border-color 0.12s ease, background 0.12s ease;
+    }
+    input:hover, select:hover { border-color: #4a4a52; }
+    input:focus, select:focus { outline: none; border-color: var(--text); background: var(--panel-3); }
+    select {
+      appearance: none;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 16px) 52%, calc(100% - 11px) 52%;
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+      padding-right: 28px;
+    }
+    input[type="number"] { appearance: textfield; }
+    input[type="checkbox"] { width: 18px; height: 18px; padding: 0; border-radius: 5px; }
+    .inline { display: flex; align-items: center; gap: 8px; }
+    .hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .hidden { display: none !important; }
+    .preview { display: grid; gap: 5px; }
+    .preview .item {
+      display: flex; gap: 8px; align-items: center;
+      padding: 5px 8px; border-radius: 8px;
+      background: var(--panel-2); border: 1px solid transparent;
+    }
+    .preview .me { border-color: var(--text); background: var(--panel-3); }
+    .preview .ix {
+      color: var(--muted); font-variant-numeric: tabular-nums;
+      min-width: 16px; text-align: center; font-size: 11px;
+    }
+    .preview .me .ix { color: var(--text); }
+    .preview .empty { color: var(--muted); font-size: 12px; }
+    .preview .item input[type="text"] { flex: 1; padding: 5px 8px; }
+    .preview .move { display: flex; gap: 3px; }
+    .preview .move button {
+      width: 28px; height: 28px; padding: 0; line-height: 1; font-size: 10px;
+      border: 1px solid var(--line-strong); border-radius: 7px;
+      background: var(--panel); color: var(--muted); cursor: pointer;
+      transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+    }
+    .preview .move button:hover:not(:disabled) { color: var(--text); border-color: var(--text); background: var(--panel-3); }
+    .preview .move button:disabled { opacity: 0.25; cursor: default; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="section">
+      <h2>このキー</h2>
+      <div class="row">
+        <label for="role">操作</label>
+        <select id="role">
+          <option value="volume-up">音量を上げる</option>
+          <option value="volume-down">音量を下げる</option>
+          <option value="mute-toggle">ミュート切替</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="target">対象</label>
+        <select id="target">
+          <option value="slot">アプリ（自動スロット）</option>
+          <option value="master">マスター（システム音量）</option>
+        </select>
+      </div>
+      <div class="row slot-only">
+        <label for="slot">スロット</label>
+        <input id="slot" type="number" min="0" step="1" />
+      </div>
+    </section>
+
+    <section class="section slot-only">
+      <h2>検出中のアプリ <span class="tag">名前は全キー共通</span></h2>
+      <div class="preview" id="preview"><div class="empty">検出待ち…</div></div>
+      <div class="hint">表示名の変更（空欄＝検出名）と、▲▼ でスロットの優先順位を変更できます。番号は現在のスロット位置です（全キー共通）。</div>
+    </section>
+
+    <section class="section global">
+      <h2>全体設定 <span class="tag">全キー共通</span></h2>
+      <div class="row">
+        <label for="show-apps">検出対象</label>
+        <select id="show-apps">
+          <option value="active">アクティブのみ</option>
+          <option value="all">すべて</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="group-duplicates">同名アプリをまとめる</label>
+        <div class="inline"><input id="group-duplicates" type="checkbox" /></div>
+      </div>
+      <div class="row">
+        <label for="step">音量ステップ (%)</label>
+        <input id="step" type="number" min="1" max="100" step="1" />
+      </div>
+      <div class="row">
+        <label for="poll">更新間隔 (秒)</label>
+        <input id="poll" type="number" min="0.5" max="10" step="0.5" />
+      </div>
+      <div class="hint">これらは全キーで共有されます。更新間隔を長くすると CPU 負荷は下がりますが、新しいアプリの検出が遅くなります。</div>
+    </section>
+  </div>
+
+  <script>
+    const VALID_ROLES = ["volume-up", "volume-down", "mute-toggle"];
+    const GLOBAL_DEFAULTS = { showApps: "active", groupDuplicates: true, step: 0.05, pollMs: 1500 };
+    const MIN_POLL_MS = 500, MAX_POLL_MS = 10000;
+
+    const state = {
+      websocket: null, context: null, actionUUID: null,
+      settings: {}, needsCleanup: false, apps: [],
+      global: {}, // full global settings object (shared with plugin's `devices`)
+    };
+
+    function cleanSettings(s) {
+      s = s || {};
+      const role = VALID_ROLES.includes(s.role) ? s.role : "volume-up";
+      return {
+        role,
+        master: s.master === true,
+        slot: Math.max(0, Number(s.slot ?? 0)),
+      };
+    }
+
+    function settingsNeedCleanup(s) {
+      const allowed = new Set(["role", "master", "slot"]);
+      for (const key of Object.keys(s || {})) {
+        if (!allowed.has(key)) return true;
+      }
+      if (s && s.role !== undefined && !VALID_ROLES.includes(s.role)) return true;
+      return false;
+    }
+
+    function detection() {
+      const d = (state.global && state.global.detection) || {};
+      const pollMs = Number(d.pollMs);
+      return {
+        showApps: d.showApps === "all" ? "all" : "active",
+        groupDuplicates: d.groupDuplicates !== false,
+        step: typeof d.step === "number" && d.step > 0 && d.step <= 1 ? d.step : GLOBAL_DEFAULTS.step,
+        pollMs: Number.isFinite(pollMs) ? Math.min(MAX_POLL_MS, Math.max(MIN_POLL_MS, pollMs)) : GLOBAL_DEFAULTS.pollMs,
+      };
+    }
+
+    function aliases() {
+      return (state.global && state.global.aliases && typeof state.global.aliases === "object") ? state.global.aliases : {};
+    }
+
+    function order() {
+      return (state.global && Array.isArray(state.global.order)) ? state.global.order : [];
+    }
+
+    function sendOrder(next) {
+      state.global = { ...state.global, order: next };
+      pushGlobal();
+    }
+
+    function reorderAt(i, dir) {
+      const apps = state.apps.slice();
+      const j = dir === "up" ? i - 1 : i + 1;
+      if (i < 0 || j < 0 || j >= apps.length) return;
+      const tmp = apps[i]; apps[i] = apps[j]; apps[j] = tmp;
+      // Optimistically reflect the new order in the preview immediately.
+      state.apps = apps;
+      const leftover = order().filter((k) => !apps.includes(k));
+      sendOrder([...apps, ...leftover]);
+    }
+
+    const el = {
+      role: document.getElementById("role"),
+      target: document.getElementById("target"),
+      slot: document.getElementById("slot"),
+      showApps: document.getElementById("show-apps"),
+      groupDuplicates: document.getElementById("group-duplicates"),
+      step: document.getElementById("step"),
+      poll: document.getElementById("poll"),
+      preview: document.getElementById("preview"),
+      slotOnly: Array.from(document.querySelectorAll(".slot-only")),
+    };
+
+    function connectElgatoStreamDeckSocket(inPort, inPluginUUID, inRegisterEvent, inInfo, inActionInfo) {
+      state.context = inPluginUUID;
+      try {
+        const actionInfo = typeof inActionInfo === "string" ? JSON.parse(inActionInfo) : (inActionInfo || {});
+        state.actionUUID = actionInfo.action || null;
+        state.settings = (actionInfo.payload && actionInfo.payload.settings) || {};
+      } catch (error) {
+        state.settings = {};
+      }
+      state.needsCleanup = settingsNeedCleanup(state.settings);
+      state.settings = cleanSettings(state.settings);
+      render();
+
+      state.websocket = new WebSocket(`ws://127.0.0.1:${inPort}`);
+      state.websocket.onopen = () => {
+        state.websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inPluginUUID }));
+        state.websocket.send(JSON.stringify({ event: "getSettings", context: inPluginUUID }));
+        state.websocket.send(JSON.stringify({ event: "getGlobalSettings", context: inPluginUUID }));
+        if (state.needsCleanup) { state.needsCleanup = false; sendSettings({}); }
+        requestApps();
+      };
+      state.websocket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.event === "didReceiveSettings") {
+          state.settings = cleanSettings((data.payload && data.payload.settings) || {});
+          render();
+        } else if (data.event === "didReceiveGlobalSettings") {
+          state.global = (data.payload && data.payload.settings) || {};
+          render();
+          requestApps();
+        } else if (data.event === "sendToPropertyInspector") {
+          const p = data.payload || {};
+          if (p.event === "apps" && Array.isArray(p.apps)) {
+            state.apps = p.apps;
+            renderPreview();
+          }
+        }
+      };
+      setInterval(requestApps, 2000);
+    }
+
+    function requestApps() {
+      if (!state.websocket || state.websocket.readyState !== WebSocket.OPEN || !state.actionUUID) return;
+      state.websocket.send(JSON.stringify({
+        event: "sendToPlugin",
+        action: state.actionUUID,
+        context: state.context,
+        payload: { request: "getApps" },
+      }));
+    }
+
+    function sendSettings(next) {
+      state.settings = { ...state.settings, ...next };
+      render();
+      if (!state.websocket || state.websocket.readyState !== WebSocket.OPEN || !state.context) return;
+      state.websocket.send(JSON.stringify({
+        event: "setSettings",
+        context: state.context,
+        payload: state.settings,
+      }));
+    }
+
+    function pushGlobal() {
+      render();
+      if (!state.websocket || state.websocket.readyState !== WebSocket.OPEN || !state.context) return;
+      state.websocket.send(JSON.stringify({
+        event: "setGlobalSettings",
+        context: state.context,
+        payload: state.global,
+      }));
+      requestApps();
+    }
+
+    function sendGlobal(nextDetection) {
+      state.global = { ...state.global, detection: { ...detection(), ...nextDetection } };
+      pushGlobal();
+    }
+
+    function sendAlias(key, value) {
+      const next = { ...aliases() };
+      if (value && value.trim()) {
+        next[key] = value.trim();
+      } else {
+        delete next[key];
+      }
+      state.global = { ...state.global, aliases: next };
+      pushGlobal();
+    }
+
+    function render() {
+      const role = VALID_ROLES.includes(state.settings.role) ? state.settings.role : "volume-up";
+      const master = state.settings.master === true;
+      el.role.value = role;
+      el.target.value = master ? "master" : "slot";
+      el.slot.value = String(Math.max(0, Number(state.settings.slot ?? 0)));
+      el.slotOnly.forEach((node) => node.classList.toggle("hidden", master));
+
+      const d = detection();
+      el.showApps.value = d.showApps;
+      el.groupDuplicates.checked = d.groupDuplicates;
+      el.step.value = String(Math.round(d.step * 100));
+      el.poll.value = String(d.pollMs / 1000);
+
+      renderPreview();
+    }
+
+    function renderPreview() {
+      // Don't rebuild while the user is editing an alias text field (would drop
+      // focus). Reorder buttons should NOT block the rebuild.
+      const active = document.activeElement;
+      if (active && active.tagName === "INPUT" && active.type === "text" && el.preview.contains(active)) return;
+
+      const selected = Math.max(0, Number(state.settings.slot ?? 0));
+      const map = aliases();
+      const rows = [];
+      const count = Math.max(state.apps.length, selected + 1);
+      for (let i = 0; i < count; i++) {
+        const key = state.apps[i];
+        const item = document.createElement("div");
+        item.className = "item" + (i === selected && !state.settings.master ? " me" : "");
+        const ix = document.createElement("span");
+        ix.className = "ix";
+        ix.textContent = String(i);
+        item.append(ix);
+        if (key) {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.maxLength = 24;
+          input.placeholder = key;
+          input.value = map[key] || "";
+          input.addEventListener("change", () => sendAlias(key, input.value));
+          item.append(input);
+
+          const move = document.createElement("span");
+          move.className = "move";
+          const up = document.createElement("button");
+          up.type = "button";
+          up.textContent = "▲";
+          up.title = "優先度を上げる";
+          up.disabled = i === 0;
+          up.addEventListener("click", () => reorderAt(i, "up"));
+          const down = document.createElement("button");
+          down.type = "button";
+          down.textContent = "▼";
+          down.title = "優先度を下げる";
+          down.disabled = i >= state.apps.length - 1;
+          down.addEventListener("click", () => reorderAt(i, "down"));
+          move.append(up, down);
+          item.append(move);
+        } else {
+          const empty = document.createElement("span");
+          empty.className = "empty";
+          empty.textContent = "（空き）";
+          item.append(empty);
+        }
+        rows.push(item);
+      }
+      if (!rows.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "検出待ち…";
+        rows.push(empty);
+      }
+      el.preview.replaceChildren(...rows);
+    }
+
+    // Per-key
+    el.role.addEventListener("change", () => sendSettings({ role: el.role.value }));
+    el.target.addEventListener("change", () => sendSettings({ master: el.target.value === "master" }));
+    el.slot.addEventListener("change", () => sendSettings({ slot: Math.max(0, Number(el.slot.value || 0)) }));
+
+    // Global (shared)
+    el.showApps.addEventListener("change", () => sendGlobal({ showApps: el.showApps.value === "all" ? "all" : "active" }));
+    el.groupDuplicates.addEventListener("change", () => sendGlobal({ groupDuplicates: el.groupDuplicates.checked }));
+    el.step.addEventListener("change", () => sendGlobal({ step: Math.max(1, Math.min(100, Number(el.step.value || 5))) / 100 }));
+    el.poll.addEventListener("change", () => {
+      const ms = Math.round(Math.max(0.5, Math.min(10, Number(el.poll.value || 1.5))) * 1000);
+      sendGlobal({ pollMs: ms });
+    });
+  </script>
+</body>
+</html>
