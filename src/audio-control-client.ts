@@ -62,6 +62,25 @@ export class AudioControlClient {
     await this.ensureConnected();
   }
 
+  /**
+   * Forcibly drops the current connection so the next request/connect reconnects
+   * from scratch. Used by the server-restart key: after the server is killed the
+   * old socket may briefly still report OPEN, so we tear it down explicitly
+   * rather than trust a stale `readyState`.
+   */
+  disconnect(): void {
+    const socket = this.socket;
+    this.socket = undefined;
+    this.connectPromise = undefined;
+    if (socket) {
+      try {
+        socket.terminate();
+      } catch {
+        // Already gone — nothing to do.
+      }
+    }
+  }
+
   onMessage(listener: (event: any) => void): () => void {
     this.messageListeners.add(listener);
     return () => {
@@ -116,12 +135,22 @@ export class AudioControlClient {
     this.instancesInFlight = (async () => {
       try {
         const count = await this.getApplicationInstanceCount();
+        // Read every index concurrently rather than sequentially. The audio
+        // server aborts (ucrtbase, 0xc0000409) when an index goes out of range
+        // because a session ended between reading the count and reading that
+        // index — and a sequential loop holds that window open for `count`
+        // round-trips, the worst possible exposure. Firing all reads at once
+        // collapses the window to a single round-trip, so a session that
+        // disappears mid-enumeration is far less likely to be indexed.
+        const results = await Promise.allSettled(
+          Array.from({ length: count }, (_, index) => this.getApplicationInstanceAtIndex(index)),
+        );
         const instances: ApplicationInstance[] = [];
-        for (let index = 0; index < count; index += 1) {
-          try {
-            instances.push(await this.getApplicationInstanceAtIndex(index));
-          } catch (error) {
-            streamDeck.logger.warn(`Failed to read application instance ${index}: ${String(error)}`);
+        for (const result of results) {
+          if (result.status === "fulfilled") {
+            instances.push(result.value);
+          } else {
+            streamDeck.logger.warn(`Failed to read application instance: ${String(result.reason)}`);
           }
         }
         this.instancesCache = { at: Date.now(), value: instances };
@@ -211,7 +240,7 @@ export class AudioControlClient {
       const onOpen = () => {
         cleanupStartupListeners();
         socket.on("message", (data) => this.handleMessage(data));
-        socket.on("close", () => this.handleClose());
+        socket.on("close", () => this.handleClose(socket));
         socket.on("error", (error) => {
           streamDeck.logger.warn(`Audio Control WebSocket error: ${String(error)}`);
         });
@@ -274,7 +303,13 @@ export class AudioControlClient {
     pending.resolve(message.result);
   }
 
-  private handleClose(): void {
+  private handleClose(socket: WebSocket): void {
+    // Ignore a stale close from a socket we've already replaced (e.g. after
+    // disconnect() + reconnect), so we don't null out the live connection.
+    if (this.socket && this.socket !== socket) {
+      return;
+    }
+
     this.socket = undefined;
     this.connectPromise = undefined;
 

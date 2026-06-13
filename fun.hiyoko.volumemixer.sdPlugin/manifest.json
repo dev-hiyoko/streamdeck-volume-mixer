@@ -37,6 +37,19 @@
           "TitleAlignment": "middle"
         }
       ]
+    },
+    {
+      "UUID": "fun.hiyoko.volumemixer.restart-server",
+      "Name": "音声サーバー再起動",
+      "Tooltip": "ElgatoAudioControlServer を再起動して、ハング/オフラインから復旧します。",
+      "Icon": "imgs/action-icon",
+      "Controllers": ["Keypad"],
+      "States": [
+        {
+          "Image": "imgs/action-icon",
+          "TitleAlignment": "middle"
+        }
+      ]
     }
   ]
 }

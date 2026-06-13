@@ -9,6 +9,8 @@ const MUTED = "#b9b9c0";
 const FAINT = "#4a4a52";
 const TRACK = "#3a3a40";
 const RED = "#ff5a5a";
+const GREEN = "#5ad48a";
+const AMBER = "#ffcf5a";
 const BG = "#151517";
 const STROKE = "#34343a";
 const FONT = "Segoe UI, system-ui, sans-serif";
@@ -17,7 +19,8 @@ export type KeyImageOptions =
   | { kind: "volume"; direction: "up" | "down"; name: string; percent: number; count?: number }
   | { kind: "mute"; name: string; muted: boolean; count?: number }
   | { kind: "empty"; name: string }
-  | { kind: "offline" };
+  | { kind: "offline" }
+  | { kind: "restart"; status: "idle" | "working" | "ok" | "error" };
 
 const FADER = { top: 21, bottom: 59, cx: 36, trackW: 4, knobW: 26, knobH: 8 };
 
@@ -89,9 +92,33 @@ function frame(inner: string): string {
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 
+/** A circular refresh arrow, centred, for the audio-server restart key. */
+function refreshGlyph(color: string): string {
+  return (
+    `<g transform="translate(36,38)">` +
+    `<path d="M 11 -5 A 13 13 0 1 0 13 6" fill="none" stroke="${color}" stroke-width="4.5" stroke-linecap="round"/>` +
+    `<path d="M 6 -13 L 17 -8 L 8 0 Z" fill="${color}"/>` +
+    `</g>`
+  );
+}
+
 export function renderKeyImage(opts: KeyImageOptions): string {
   if (opts.kind === "offline") {
     return frame(speaker(FAINT, false) + bottomText("オフライン", MUTED));
+  }
+
+  if (opts.kind === "restart") {
+    const color =
+      opts.status === "ok" ? GREEN : opts.status === "error" ? RED : opts.status === "working" ? AMBER : WHITE;
+    const text =
+      opts.status === "ok"
+        ? bottomText("OK", GREEN, true)
+        : opts.status === "error"
+          ? bottomText("失敗", RED, true)
+          : opts.status === "working"
+            ? bottomText("実行中…", AMBER)
+            : bottomText("再起動", MUTED);
+    return frame(nameText("音声サーバー") + refreshGlyph(color) + text);
   }
 
   if (opts.kind === "empty") {

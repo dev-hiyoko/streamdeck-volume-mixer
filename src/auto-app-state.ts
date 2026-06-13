@@ -190,15 +190,22 @@ async function applySavedStateToGroup(group: AutoAppGroup, saved: SavedAppState 
 
   await Promise.all(
     group.instances.map(async (instance) => {
-      if (typeof saved.volume === "number" && Number.isFinite(saved.volume)) {
-        const nextVolume = clampVolume(saved.volume);
-        if (Math.abs(instance.volume - nextVolume) > 0.005) {
-          await audioControlClient.setApplicationInstanceVolume(instance.processID, nextVolume);
+      // Guard each instance independently: a session can end between when it was
+      // enumerated and when we write to it, so a stale processID write may fail —
+      // don't let that reject the whole sweep (or the others' writes).
+      try {
+        if (typeof saved.volume === "number" && Number.isFinite(saved.volume)) {
+          const nextVolume = clampVolume(saved.volume);
+          if (Math.abs(instance.volume - nextVolume) > 0.005) {
+            await audioControlClient.setApplicationInstanceVolume(instance.processID, nextVolume);
+          }
         }
-      }
 
-      if (typeof saved.mute === "boolean" && instance.mute !== saved.mute) {
-        await audioControlClient.setApplicationInstanceMute(instance.processID, saved.mute);
+        if (typeof saved.mute === "boolean" && instance.mute !== saved.mute) {
+          await audioControlClient.setApplicationInstanceMute(instance.processID, saved.mute);
+        }
+      } catch (error) {
+        streamDeck.logger.warn(`Failed to apply saved state to PID ${instance.processID}: ${String(error)}`);
       }
     }),
   );
@@ -229,6 +236,11 @@ export function scheduleAutoAppSync(): void {
 
   syncTimer = setTimeout(() => {
     syncTimer = undefined;
-    void syncAllAutoAppGroups();
+    // Must not be fire-and-forget: a rejected request here (server closed /
+    // timed out) would become an unhandled rejection and crash the plugin
+    // process, which is what makes the keys go offline and stay offline.
+    syncAllAutoAppGroups().catch((error) => {
+      streamDeck.logger.warn(`Auto app-state sync failed (will retry next poll): ${String(error)}`);
+    });
   }, 250);
 }

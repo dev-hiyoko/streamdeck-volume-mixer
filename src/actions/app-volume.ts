@@ -56,7 +56,9 @@ export class AppVolumeAction extends SingletonAction<AppMixerSettings> {
     // The audio server's change notifications are unreliable, so poll for newly
     // started / stopped audio apps. The interval is a global setting (CPU cost),
     // re-read each cycle so changes take effect without a restart.
-    void this.pollLoop();
+    this.pollLoop().catch((error) => {
+      streamDeck.logger.warn(`Poll loop error: ${String(error)}`);
+    });
 
     audioControlClient.onMessage((event) => {
       if (
@@ -82,14 +84,24 @@ export class AppVolumeAction extends SingletonAction<AppMixerSettings> {
 
   /** Self-rescheduling poll loop; interval comes from global settings. */
   private async pollLoop(): Promise<void> {
-    await this.poll();
+    try {
+      await this.poll();
+    } catch (error) {
+      streamDeck.logger.warn(`Poll iteration failed: ${String(error)}`);
+    }
     let pollMs = 1500;
     try {
       pollMs = (await getGlobalMixerSettings()).pollMs;
     } catch {
       // keep default
     }
-    setTimeout(() => void this.pollLoop(), pollMs);
+    // The loop must never die — keep it self-rescheduling even if an iteration
+    // threw, so the plugin reconnects on its own once the server is back.
+    setTimeout(() => {
+      this.pollLoop().catch((error) => {
+        streamDeck.logger.warn(`Poll loop error: ${String(error)}`);
+      });
+    }, pollMs);
   }
 
   /** Periodic detection: pick up apps that started/stopped making sound. */
@@ -123,7 +135,11 @@ export class AppVolumeAction extends SingletonAction<AppMixerSettings> {
     }
     this.titleTimer = setTimeout(() => {
       this.titleTimer = undefined;
-      void this.updateVisibleTitles();
+      // A settings/device read here can reject on a server timeout; catch it so
+      // it can't become an unhandled rejection that kills the plugin process.
+      this.updateVisibleTitles().catch((error) => {
+        streamDeck.logger.warn(`Title refresh failed: ${String(error)}`);
+      });
     }, 150);
   }
 
