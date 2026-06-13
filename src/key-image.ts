@@ -17,10 +17,64 @@ const FONT = "Segoe UI, system-ui, sans-serif";
 
 export type KeyImageOptions =
   | { kind: "volume"; direction: "up" | "down"; name: string; percent: number; count?: number }
-  | { kind: "mute"; name: string; muted: boolean; count?: number }
+  | { kind: "mute"; name: string; muted: boolean; count?: number; icon?: string }
   | { kind: "empty"; name: string }
   | { kind: "offline" }
   | { kind: "restart"; status: "idle" | "working" | "ok" | "error" };
+
+/**
+ * Monochrome glyphs selectable per app for the mute key, so same-looking app
+ * keys can be told apart without resorting to colourful app icons. IDs must
+ * match the picker in ui/action-settings.html. A `<g>` wrapper centres a 0–24
+ * glyph in the key; some glyphs carve detail with the background colour.
+ */
+const MUTE_ICONS: Record<string, (color: string) => string> = {
+  music: (c) =>
+    `<circle cx="8" cy="18" r="3.5" fill="${c}"/><rect x="11" y="4" width="2" height="14" fill="${c}"/>` +
+    `<path d="M13 4 q6 1 6 7 q-3 -4 -6 -4 Z" fill="${c}"/>`,
+  game: (c) =>
+    `<rect x="2" y="8" width="20" height="11" rx="5.5" fill="${c}"/>` +
+    `<rect x="5.5" y="12.4" width="5" height="1.6" fill="${BG}"/><rect x="7.2" y="10.7" width="1.6" height="5" fill="${BG}"/>` +
+    `<circle cx="16" cy="12" r="1.3" fill="${BG}"/><circle cx="18.5" cy="14.5" r="1.3" fill="${BG}"/>`,
+  chat: (c) =>
+    `<path d="M3 4 H21 a2 2 0 0 1 2 2 V15 a2 2 0 0 1 -2 2 H10 L5 21 V17 H3 a2 2 0 0 1 -2 -2 V6 a2 2 0 0 1 2 -2 Z" fill="${c}"/>`,
+  globe: (c) =>
+    `<circle cx="12" cy="12" r="10" fill="none" stroke="${c}" stroke-width="2"/>` +
+    `<ellipse cx="12" cy="12" rx="4" ry="10" fill="none" stroke="${c}" stroke-width="1.6"/>` +
+    `<line x1="2" y1="12" x2="22" y2="12" stroke="${c}" stroke-width="1.6"/>`,
+  video: (c) =>
+    `<rect x="2" y="3" width="20" height="18" rx="4" fill="none" stroke="${c}" stroke-width="2"/>` +
+    `<path d="M10 8 L16 12 L10 16 Z" fill="${c}"/>`,
+  mic: (c) =>
+    `<rect x="9" y="2" width="6" height="12" rx="3" fill="${c}"/>` +
+    `<path d="M5 11 a7 7 0 0 0 14 0" fill="none" stroke="${c}" stroke-width="2"/>` +
+    `<line x1="12" y1="18" x2="12" y2="22" stroke="${c}" stroke-width="2"/><line x1="8" y1="22" x2="16" y2="22" stroke="${c}" stroke-width="2"/>`,
+  headphones: (c) =>
+    `<path d="M3 14 V12 a9 9 0 0 1 18 0 V14" fill="none" stroke="${c}" stroke-width="2"/>` +
+    `<rect x="2" y="13" width="4.5" height="8" rx="2" fill="${c}"/><rect x="17.5" y="13" width="4.5" height="8" rx="2" fill="${c}"/>`,
+  terminal: (c) =>
+    `<rect x="2" y="3" width="20" height="18" rx="3" fill="none" stroke="${c}" stroke-width="2"/>` +
+    `<path d="M6 9 L9 12 L6 15" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>` +
+    `<line x1="11" y1="15" x2="16" y2="15" stroke="${c}" stroke-width="2" stroke-linecap="round"/>`,
+  bell: (c) =>
+    `<path d="M12 2 a6 6 0 0 1 6 6 c0 6 2 8 3 9 H3 c1 -1 3 -3 3 -9 a6 6 0 0 1 6 -6 Z" fill="${c}"/>` +
+    `<path d="M9.5 20 a2.5 2.5 0 0 0 5 0" fill="${c}"/>`,
+  star: (c) => `<path d="M12 1 L15 9 L23 9 L16.5 14 L19 22 L12 17 L5 22 L7.5 14 L1 9 L9 9 Z" fill="${c}"/>`,
+  heart: (c) => `<path d="M12 21 C3 14 3 6 8 5 C11 4.5 12 7 12 7 C12 7 13 4.5 16 5 C21 6 21 14 12 21 Z" fill="${c}"/>`,
+};
+
+/** Returns the mute-key glyph for an icon id, centred; falls back to a speaker. */
+function muteGlyph(icon: string | undefined, muted: boolean, color: string): string {
+  if (!icon || icon === "speaker") {
+    // Default keeps the speaker's "waves when audible" look.
+    return speaker(color, !muted);
+  }
+  const draw = MUTE_ICONS[icon];
+  if (!draw) {
+    return speaker(color, !muted);
+  }
+  return `<g transform="translate(22,20) scale(1.17)">${draw(color)}</g>`;
+}
 
 const FADER = { top: 21, bottom: 59, cx: 36, trackW: 4, knobW: 26, knobH: 8 };
 
@@ -126,12 +180,11 @@ export function renderKeyImage(opts: KeyImageOptions): string {
   }
 
   if (opts.kind === "mute") {
-    const glyph = opts.muted
-      ? speaker(WHITE, false) + `<line x1="20" y1="20" x2="50" y2="50" stroke="${RED}" stroke-width="4.5" stroke-linecap="round"/>`
-      : speaker(WHITE, true);
-    const state = opts.muted
-      ? bottomText("ミュート", RED, true)
-      : bottomText("通常", MUTED);
+    const slash = opts.muted
+      ? `<line x1="20" y1="20" x2="50" y2="50" stroke="${RED}" stroke-width="4.5" stroke-linecap="round"/>`
+      : "";
+    const glyph = muteGlyph(opts.icon, opts.muted, WHITE) + slash;
+    const state = opts.muted ? bottomText("ミュート", RED, true) : bottomText("通常", MUTED);
     return frame(nameText(label(opts.name, opts.count)) + glyph + state);
   }
 

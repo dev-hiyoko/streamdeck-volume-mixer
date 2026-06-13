@@ -92,7 +92,8 @@
     }
     .preview .me .ix { color: var(--text); }
     .preview .empty { color: var(--muted); font-size: 12px; }
-    .preview .item input[type="text"] { flex: 1; padding: 5px 8px; }
+    .preview .item input[type="text"] { flex: 1; min-width: 0; padding: 5px 8px; }
+    .preview .item select.icon-pick { flex: 0 0 auto; width: 88px; padding: 5px 22px 5px 8px; font-size: 11px; }
     .preview .move { display: flex; gap: 3px; }
     .preview .move button {
       width: 28px; height: 28px; padding: 0; line-height: 1; font-size: 10px;
@@ -162,6 +163,21 @@
 
   <script>
     const VALID_ROLES = ["volume-up", "volume-down", "mute-toggle"];
+    // Mute-key glyphs (ids must match key-image.ts MUTE_ICONS; "" = default speaker).
+    const ICON_OPTIONS = [
+      { id: "", label: "既定（スピーカー）" },
+      { id: "music", label: "音符" },
+      { id: "game", label: "ゲーム" },
+      { id: "chat", label: "チャット" },
+      { id: "globe", label: "ブラウザ" },
+      { id: "video", label: "動画" },
+      { id: "mic", label: "マイク" },
+      { id: "headphones", label: "ヘッドホン" },
+      { id: "terminal", label: "端末" },
+      { id: "bell", label: "ベル" },
+      { id: "star", label: "スター" },
+      { id: "heart", label: "ハート" },
+    ];
     const GLOBAL_DEFAULTS = { showApps: "active", groupDuplicates: true, step: 0.05, pollMs: 1500 };
     const MIN_POLL_MS = 500, MAX_POLL_MS = 10000;
 
@@ -203,6 +219,17 @@
 
     function aliases() {
       return (state.global && state.global.aliases && typeof state.global.aliases === "object") ? state.global.aliases : {};
+    }
+
+    function iconsMap() {
+      return (state.global && state.global.icons && typeof state.global.icons === "object") ? state.global.icons : {};
+    }
+
+    function sendIcon(key, value) {
+      const next = { ...iconsMap() };
+      if (value) { next[key] = value; } else { delete next[key]; }
+      state.global = { ...state.global, icons: next };
+      pushGlobal();
     }
 
     function order() {
@@ -344,13 +371,16 @@
     }
 
     function renderPreview() {
-      // Don't rebuild while the user is editing an alias text field (would drop
-      // focus). Reorder buttons should NOT block the rebuild.
+      // Don't rebuild while the user is editing an alias field or has the icon
+      // picker open (would drop focus / close the dropdown). Reorder buttons
+      // should NOT block the rebuild.
       const active = document.activeElement;
-      if (active && active.tagName === "INPUT" && active.type === "text" && el.preview.contains(active)) return;
+      if (active && el.preview.contains(active) &&
+          (active.tagName === "SELECT" || (active.tagName === "INPUT" && active.type === "text"))) return;
 
       const selected = Math.max(0, Number(state.settings.slot ?? 0));
       const map = aliases();
+      const iconMap = iconsMap();
       const rows = [];
       const count = Math.max(state.apps.length, selected + 1);
       for (let i = 0; i < count; i++) {
@@ -362,6 +392,19 @@
         ix.textContent = String(i);
         item.append(ix);
         if (key) {
+          const iconSel = document.createElement("select");
+          iconSel.className = "icon-pick";
+          iconSel.title = "ミュートキーのアイコン";
+          for (const opt of ICON_OPTIONS) {
+            const o = document.createElement("option");
+            o.value = opt.id;
+            o.textContent = opt.label;
+            iconSel.append(o);
+          }
+          iconSel.value = iconMap[key] || "";
+          iconSel.addEventListener("change", () => sendIcon(key, iconSel.value));
+          item.append(iconSel);
+
           const input = document.createElement("input");
           input.type = "text";
           input.maxLength = 24;

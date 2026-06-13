@@ -3,12 +3,14 @@ import streamDeck, {
   SingletonAction,
   type DidReceiveSettingsEvent,
   type KeyDownEvent,
+  type KeyUpEvent,
   type SendToPluginEvent,
   type WillAppearEvent,
+  type WillDisappearEvent,
 } from "@elgato/streamdeck";
 import type { JsonObject, JsonValue } from "@elgato/utils";
 
-import { audioControlClient } from "../audio-control-client.js";
+import { audioControlClient, clampVolume } from "../audio-control-client.js";
 import {
   getAutoAppStateKey,
   mirrorSavedAutoAppState,
@@ -41,9 +43,17 @@ function normalizeRole(role: string | undefined): MixerRole {
   return role === "volume-down" || role === "mute-toggle" ? role : "volume-up";
 }
 
+// Long-press repeat for the volume keys: first step on press, then auto-repeat
+// while held. REPEAT_DELAY keeps a quick tap from repeating.
+const REPEAT_DELAY_MS = 350;
+const REPEAT_INTERVAL_MS = 130;
+const MAX_REPEATS = 150; // safety: stop a runaway hold if a key-up is ever missed
+
 @action({ UUID: "fun.hiyoko.volumemixer.app-volume" })
 export class AppVolumeAction extends SingletonAction<AppMixerSettings> {
   private titleTimer?: NodeJS.Timeout;
+  // Per-key auto-repeat timers, keyed by action instance id.
+  private holdTimers = new Map<string, NodeJS.Timeout>();
 
   constructor() {
     super();
@@ -168,74 +178,137 @@ export class AppVolumeAction extends SingletonAction<AppMixerSettings> {
   }
 
   override async onKeyDown(ev: KeyDownEvent<AppMixerSettings>): Promise<void> {
+    const settings = ev.payload.settings;
     try {
-      const settings = ev.payload.settings;
-      const role = normalizeRole(settings.role);
-      const global = await getGlobalMixerSettings();
-
-      if (settings.master) {
-        const device = await audioControlClient.getSystemDefaultDevice();
-        if (role === "mute-toggle") {
-          await audioControlClient.setSystemDefaultDeviceMute(!device.mute);
-        } else {
-          // Changing the volume implies the user wants to hear it: lift mute.
-          if (device.mute) {
-            await audioControlClient.setSystemDefaultDeviceMute(false);
-          }
-          await audioControlClient.setSystemDefaultDeviceVolume(
-            device.volume + (role === "volume-down" ? -global.step : global.step),
-          );
-        }
-        await delay(150);
-        await this.renderKey(ev.action, settings);
-        return;
-      }
-
-      const target = await resolveApplicationTargetGroup({
-        slot: settings.slot,
-        showApps: global.showApps,
-        groupDuplicates: global.groupDuplicates,
-        order: global.order,
-      });
-      if (!target) {
-        // Empty slot: nothing to control yet, but the key stays placed and will
-        // pick up an app as soon as one occupies this slot.
-        await this.renderKey(ev.action, settings);
-        return;
-      }
-
-      const { representative, instances } = target;
-      const primaryKey = getAutoAppStateKey(representative, global.groupDuplicates);
-      const secondaryKey = getAutoAppStateKey(representative, !global.groupDuplicates);
-
-      if (role === "mute-toggle") {
-        const nextMute = !representative.mute;
-        await Promise.all(
-          instances.map((instance) => audioControlClient.setApplicationInstanceMute(instance.processID, nextMute)),
-        );
-        await updateSavedAutoAppState(primaryKey, { mute: nextMute });
-      } else {
-        const nextVolume = representative.volume + (role === "volume-down" ? -global.step : global.step);
-        // Changing the volume implies the user wants to hear it: lift mute.
-        const wasMuted = representative.mute;
-        await Promise.all(
-          instances.map((instance) => audioControlClient.setApplicationInstanceVolume(instance.processID, nextVolume)),
-        );
-        if (wasMuted) {
-          await Promise.all(
-            instances.map((instance) => audioControlClient.setApplicationInstanceMute(instance.processID, false)),
-          );
-        }
-        // Persist mute:false too, or the per-poll sync would re-apply the old mute.
-        await updateSavedAutoAppState(primaryKey, wasMuted ? { volume: nextVolume, mute: false } : { volume: nextVolume });
-      }
-
-      await mirrorSavedAutoAppState(primaryKey, secondaryKey);
-      await delay(150);
-      await this.renderKey(ev.action, settings);
+      await this.applyStep(ev.action, settings);
     } catch {
+      this.stopHold(ev.action.id);
       await this.showImage(ev.action, renderKeyImage({ kind: "offline" }));
+      return;
     }
+    // Mute is a one-shot toggle; volume keys auto-repeat while held.
+    if (normalizeRole(settings.role) !== "mute-toggle") {
+      this.startHold(ev.action, settings);
+    }
+  }
+
+  override async onKeyUp(ev: KeyUpEvent<AppMixerSettings>): Promise<void> {
+    this.stopHold(ev.action.id);
+  }
+
+  override async onWillDisappear(ev: WillDisappearEvent<AppMixerSettings>): Promise<void> {
+    // The key is gone (profile switch, removal) — don't keep repeating into it.
+    this.stopHold(ev.action.id);
+  }
+
+  /** Begins auto-repeat for a held volume key; cleared by onKeyUp. */
+  private startHold(view: KeyView & { id: string }, settings: AppMixerSettings): void {
+    const id = view.id;
+    this.stopHold(id);
+    let repeats = 0;
+    const tick = async (): Promise<void> => {
+      try {
+        await this.applyStep(view, settings);
+      } catch {
+        this.stopHold(id);
+        return;
+      }
+      // Released (or disappeared) while the step was in flight — stop here.
+      if (!this.holdTimers.has(id) || (repeats += 1) >= MAX_REPEATS) {
+        this.stopHold(id);
+        return;
+      }
+      this.holdTimers.set(id, setTimeout(() => void tick(), REPEAT_INTERVAL_MS));
+    };
+    this.holdTimers.set(id, setTimeout(() => void tick(), REPEAT_DELAY_MS));
+  }
+
+  private stopHold(id: string): void {
+    const timer = this.holdTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.holdTimers.delete(id);
+    }
+  }
+
+  /**
+   * Applies one volume/mute step to the key's target and repaints it from the
+   * computed value (no settle-delay or read-back), so auto-repeat stays snappy
+   * and light on the audio server.
+   */
+  private async applyStep(view: KeyView, settings: AppMixerSettings): Promise<void> {
+    const role = normalizeRole(settings.role);
+    const global = await getGlobalMixerSettings();
+
+    if (settings.master) {
+      const device = await audioControlClient.getSystemDefaultDevice();
+      if (role === "mute-toggle") {
+        const muted = !device.mute;
+        await audioControlClient.setSystemDefaultDeviceMute(muted);
+        await this.showImage(view, renderKeyImage({ kind: "mute", name: "マスター", muted }));
+        return;
+      }
+      // Changing the volume implies the user wants to hear it: lift mute.
+      if (device.mute) {
+        await audioControlClient.setSystemDefaultDeviceMute(false);
+      }
+      const nextVolume = clampVolume(device.volume + (role === "volume-down" ? -global.step : global.step));
+      await audioControlClient.setSystemDefaultDeviceVolume(nextVolume);
+      await this.showImage(
+        view,
+        renderKeyImage({ kind: "volume", direction: role === "volume-down" ? "down" : "up", name: "マスター", percent: nextVolume * 100 }),
+      );
+      return;
+    }
+
+    const target = await resolveApplicationTargetGroup({
+      slot: settings.slot,
+      showApps: global.showApps,
+      groupDuplicates: global.groupDuplicates,
+      order: global.order,
+    });
+    if (!target) {
+      // Empty slot: nothing to control yet, but the key stays placed and will
+      // pick up an app as soon as one occupies this slot.
+      await this.renderKey(view, settings);
+      return;
+    }
+
+    const { representative, instances } = target;
+    const nameKey = appNameKey(representative);
+    const name = global.aliases[nameKey] || nameKey;
+    const count = instances.length;
+    const primaryKey = getAutoAppStateKey(representative, global.groupDuplicates);
+    const secondaryKey = getAutoAppStateKey(representative, !global.groupDuplicates);
+
+    if (role === "mute-toggle") {
+      const nextMute = !representative.mute;
+      await Promise.all(
+        instances.map((instance) => audioControlClient.setApplicationInstanceMute(instance.processID, nextMute)),
+      );
+      await updateSavedAutoAppState(primaryKey, { mute: nextMute });
+      await this.showImage(view, renderKeyImage({ kind: "mute", name, muted: nextMute, count, icon: global.icons[nameKey] }));
+    } else {
+      const nextVolume = clampVolume(representative.volume + (role === "volume-down" ? -global.step : global.step));
+      // Changing the volume implies the user wants to hear it: lift mute.
+      const wasMuted = representative.mute;
+      await Promise.all(
+        instances.map((instance) => audioControlClient.setApplicationInstanceVolume(instance.processID, nextVolume)),
+      );
+      if (wasMuted) {
+        await Promise.all(
+          instances.map((instance) => audioControlClient.setApplicationInstanceMute(instance.processID, false)),
+        );
+      }
+      // Persist mute:false too, or the per-poll sync would re-apply the old mute.
+      await updateSavedAutoAppState(primaryKey, wasMuted ? { volume: nextVolume, mute: false } : { volume: nextVolume });
+      await this.showImage(
+        view,
+        renderKeyImage({ kind: "volume", direction: role === "volume-down" ? "down" : "up", name, percent: nextVolume * 100, count }),
+      );
+    }
+
+    await mirrorSavedAutoAppState(primaryKey, secondaryKey);
   }
 
   /** Draws the key as a glyph image (speaker / mute slash / volume ±). */
@@ -267,11 +340,12 @@ export class AppVolumeAction extends SingletonAction<AppMixerSettings> {
       }
 
       const { representative, instances } = target;
-      const name = global.aliases[appNameKey(representative)] || appNameKey(representative);
+      const nameKey = appNameKey(representative);
+      const name = global.aliases[nameKey] || nameKey;
       const count = instances.length;
       const image =
         role === "mute-toggle"
-          ? renderKeyImage({ kind: "mute", name, muted: representative.mute, count })
+          ? renderKeyImage({ kind: "mute", name, muted: representative.mute, count, icon: global.icons[nameKey] })
           : renderKeyImage({ kind: "volume", direction: role === "volume-down" ? "down" : "up", name, percent: representative.volume * 100, count });
       await this.showImage(view, image);
     } catch {
@@ -293,8 +367,4 @@ export class AppVolumeAction extends SingletonAction<AppMixerSettings> {
       }),
     );
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
